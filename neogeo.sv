@@ -162,14 +162,22 @@ module emu
 	// 1 - D-/TX
 	// 2..6 - USR2..USR6
 	// Set USER_OUT to 1 to read from USER_IN.
-	input   [6:0] USER_IN,
-	output  [6:0] USER_OUT,
+	output	USER_OSD,
+	output	USER_MODE,
+	input	[7:0] USER_IN,
+	output	[7:0] USER_OUT,
 
 	input         OSD_STATUS
 );
 
 assign ADC_BUS  = 'Z;
-assign USER_OUT = '1;
+
+wire   joy_split, joy_mdsel;
+wire   [5:0] joy_in = {USER_IN[6],USER_IN[3],USER_IN[5],USER_IN[7],USER_IN[1],USER_IN[2]};
+assign USER_OUT  = |status[31:30] ? {3'b111,joy_split,3'b111,joy_mdsel} : '1;
+assign USER_MODE = |status[31:30] ;
+assign USER_OSD  = joydb9md_1[7] & joydb9md_1[5];
+
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 
@@ -215,10 +223,12 @@ assign VIDEO_ARY = status[17] ? 8'd9  : 8'd7;	// 224/32
 `include "build_id.v"
 localparam CONF_STR = {
 	"NEOGEO;;",
-	"-;",
+"-;",
 	"H0FS1,*,Load ROM set;",
 	"H1S1,ISOBIN,Load CD Image;",
-	"-;",
+"-;",
+	"OUV,Serial SNAC DB9MD,Off,1 Player,2 Players;",
+"-;",
 	"H3OP,FM,ON,OFF;",
 	"H3OQ,ADPCMA,ON,OFF;",
 	"H3OR,ADPCMB,ON,OFF;",
@@ -233,7 +243,7 @@ localparam CONF_STR = {
 	"O12,System Type,Console(AES),Arcade(MVS);", //,CD,CDZ;",
 	"OM,BIOS,UniBIOS,Original;",
 	"O3,Video Mode,NTSC,PAL;",
-	"-;",
+"-;",
 	"H0O4,Memory Card,Plugged,Unplugged;",
 	"RL,Reload Memory Card;",
 	"D4RC,Save Memory Card;",
@@ -245,12 +255,12 @@ localparam CONF_STR = {
 	"H2O7,[DIP] Settings,OFF,ON;",
 	"H2O8,[DIP] Freeplay,OFF,ON;",
 	"H2O9,[DIP] Freeze,OFF,ON;",
-	"-;",
+"-;",
 	"OG,Width,320px,304px;",
 	"OH,Aspect Ratio,Original,Wide;",
 	"OIK,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	"O56,Stereo Mix,none,25%,50%,100%;",
-	"-;",
+"-;",
 	"RE,Reset & apply;",  // decouple manual reset from system reset 
 	"J1,A,B,C,D,Start,Select,Coin,ABC;",	// ABC is a special key to press A+B+C at once, useful for
 	"V,v",`BUILD_DATE								// keyboards that don't allow more than 2 keypresses at once
@@ -327,8 +337,52 @@ wire [63:0] img_size;
 reg  [31:0] sd_lba;
 wire [31:0] CD_sd_lba;
 
-wire [15:0] joystick_0;	// ----HNLS DCBAUDLR
-wire [15:0] joystick_1;
+wire [15:0] joystick_0_USB;	// ----HNLS DCBAUDLR
+wire [15:0] joystick_1_USB;
+
+wire [15:0] joystick_0 = |status[31:30] ? {
+	joydb9md_1[11],// ABC		->11 * Z
+	joydb9md_1[8] | (joydb9md_1[7] & joydb9md_1[4]),// Mode or Start + B-> 10 * Coin
+	joydb9md_1[10],// Select	-> 9 * Y	
+	joydb9md_1[7], // start		-> 8 * Start
+	joydb9md_1[9], // btn_fireD	-> 7 * X
+	joydb9md_1[5], // btn_fireC	-> 6 * C
+	joydb9md_1[4], // btn_fireB	-> 5 * B
+	joydb9md_1[6], // btn_fireA	-> 4 * A
+	joydb9md_1[3], // btn_up	-> 3 * U
+	joydb9md_1[2], // btn_down	-> 2 * D
+	joydb9md_1[1], // btn_left	-> 1 * L
+	joydb9md_1[0], // btn_righ	-> 0 * R 
+	} 
+	: joystick_0_USB;
+
+wire [15:0] joystick_1 =  status[31]    ? {
+	joydb9md_2[11],// ABC		->11 * Z
+	joydb9md_2[8] | (joydb9md_1[7] & joydb9md_1[4]),// Mode or Start + B-> 10 * Coin
+	joydb9md_2[10],// Select	-> 9 * Y	
+	joydb9md_2[7], // start		-> 8 * Start
+	joydb9md_2[9], // btn_fireD	-> 7 * X
+	joydb9md_2[5], // btn_fireC	-> 6 * C
+	joydb9md_2[4], // btn_fireB	-> 5 * B
+	joydb9md_2[6], // btn_fireA	-> 4 * A
+	joydb9md_2[3], // btn_up	-> 3 * U
+	joydb9md_2[2], // btn_down	-> 2 * D
+	joydb9md_2[1], // btn_left	-> 1 * L
+	joydb9md_2[0], // btn_right	-> 0 * R 
+	} 
+	: status[30] ? joystick_0_USB : joystick_1_USB;
+
+reg [15:0] joydb9md_1,joydb9md_2;
+joy_db9md joy_db9md
+(
+  .clk       ( clk_sys    ), //35-50MHz
+  .joy_split ( joy_split  ),
+  .joy_mdsel ( joy_mdsel  ),
+  .joy_in    ( joy_in     ),
+  .joystick1 ( joydb9md_1 ),
+  .joystick2 ( joydb9md_2 )	  
+);
+
 wire  [1:0] buttons;
 wire [10:0] ps2_key;
 wire        forced_scandoubler;
@@ -356,8 +410,10 @@ hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1), .VDNUM(2)) hps_io
 	.conf_str(CONF_STR),
 	.forced_scandoubler(forced_scandoubler),
 
-	.joystick_0(joystick_0), .joystick_1(joystick_1),
+	.joystick_0(joystick_0_USB), 
+	.joystick_1(joystick_1_USB),
 	.buttons(buttons),
+	.joy_raw({joydb9md_1[4],joydb9md_1[6],joydb9md_1[3:0]}),
 	.ps2_key(ps2_key),
 
 	.status(status),				// status read (32 bits)
